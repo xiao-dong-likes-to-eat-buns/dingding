@@ -1,0 +1,30 @@
+name: 每日保密早报推送
+
+on:
+  schedule:
+    # 北京时间 7:30 推送
+    # UTC = 北京时间 - 8小时，所以 7:30 = UTC 23:30 (前一天)
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  push-briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install requests
+          pip install beautifulsoup4
+
+      - name: 推送早报
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET:  ${{ secrets.DINGTALK_SECRET }}
+          AI_API_KEY:       ${{ secrets.AI_API_KEY }}
+        run: python daily_briefing.py
