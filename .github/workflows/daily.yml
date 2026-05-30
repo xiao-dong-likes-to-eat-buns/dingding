@@ -4,7 +4,7 @@ on:
   schedule:
     # 北京时间 7:30 推送
     # UTC = 北京时间 - 8小时，所以 7:30 = UTC 23:30 (前一天)
-    - cron: '30 23 * * *'
+    - cron: '30 9 * * *'
   workflow_dispatch:
 
 jobs:
