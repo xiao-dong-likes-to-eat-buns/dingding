@@ -16,8 +16,8 @@ from bs4 import BeautifulSoup
 
 
 # ============ 从环境变量读取配置 ============
-WEBHOOK = os.environ.get("DINGTALK_WEBHOOK", "https://oapi.dingtalk.com/robot/send?access_token=cc03dc2341cfea36a0063232a301bf1123ec2a27e3021d033225557160564faa")
-SECRET  = os.environ.get("DINGTALK_SECRET", "SEC739d9442d0f411b19da1a00f98be4a2ad985b9cf1464eb40d8617bc1d0451470")
+WEBHOOK = os.environ.get("DINGTALK_WEBHOOK", "https://oapi.dingtalk.com/robot/send?access_token=e17adcd8cc53e1b0ad5fbf4ee5068e2f6f07f1978dab344863b760598c9a47cf")
+SECRET  = os.environ.get("DINGTALK_SECRET", "SEC9c363ba29c8f07aa7b0d844ebcca7e222379cef30605a570378d5076e90c99ea")
 API_KEY = os.environ.get("AI_API_KEY", "sk-bb0a0e79a7f8412d9a9ab9a96545cac3")
 
 # DeepSeek 配置
