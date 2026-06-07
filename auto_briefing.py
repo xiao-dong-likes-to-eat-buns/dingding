@@ -57,52 +57,92 @@ def call_ai(system_prompt, user_prompt):
                 time.sleep(5)
     raise RuntimeError("AI调用3次全部失败")
 
+def fix_json_newlines(text):
+    """修复JSON字符串值中的字面换行符"""
+    result = []
+    in_string = False
+    escape_next = False
+    for char in text:
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            continue
+        if char == '\\' and in_string:
+            result.append(char)
+            escape_next = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            continue
+        if char == '\n' and in_string:
+            result.append('\\n')
+            continue
+        if char == '\r' and in_string:
+            continue
+        result.append(char)
+    return ''.join(result)
 
 def parse_ai_json(raw_text):
     """从AI返回中提取JSON（多策略）"""
     cleaned = raw_text.strip()
 
-    # 策略1: 去掉 markdown 代码块
+    # 去掉 markdown 代码块
     cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
-    cleaned = cleaned.strip()
 
-    # 策略2: 找最外层 { ... }（非贪婪匹配第一个完整的JSON对象）
-    # 先找第一个 { 和最后一个 } 的位置
+    # 清理 AI 偶尔在 JSON 开头加的多余字符
     first_brace = cleaned.find('{')
+    if first_brace > 0:
+        cleaned = cleaned[first_brace:]
     last_brace = cleaned.rfind('}')
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        candidate = cleaned[first_brace:last_brace + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
+    if last_brace != -1:
+        cleaned = cleaned[:last_brace + 1]
 
-    # 策略3: 正则非贪婪匹配
-    m = re.search(r'\{[^{}]*"briefing"[^{}]*\}', cleaned, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group())
-        except json.JSONDecodeError:
-            pass
-
-    # 策略4: 暴力正则
-    m = re.search(r'\{[\s\S]*?\}(?=\s*$|\s*\n\n)', cleaned)
-    if m:
-        try:
-            return json.loads(m.group())
-        except json.JSONDecodeError:
-            pass
-
-    # 策略5: 整段尝试
+    # 策略1: 直接解析
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
+    # 策略2: 修复字面换行符后解析
+    fixed = fix_json_newlines(cleaned)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略3: 修复换行 + 去掉尾部多余逗号
+    fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略4: 正则分别提取 briefing 和 questions
+    try:
+        # 提取 briefing 的值（从 "briefing": " 到 ", "questions"）
+        b_match = re.search(
+            r'"briefing"\s*:\s*"(.*?)"\s*,\s*"questions"',
+            cleaned, re.DOTALL
+        )
+        q_match = re.search(
+            r'"questions"\s*:\s*($$[\s\S]*$$)',
+            cleaned
+        )
+        if b_match and q_match:
+            briefing = b_match.group(1)
+            briefing = briefing.replace('\\n', '\n').replace('\\"', '"')
+            questions_raw = q_match.group(1)
+            questions_fixed = fix_json_newlines(questions_raw)
+            questions_fixed = re.sub(r',\s*([}\]])', r'\1', questions_fixed)
+            questions = json.loads(questions_fixed)
+            return {"briefing": briefing, "questions": questions}
+    except Exception as e:
+        print(f"    正则提取也失败: {e}")
+
     print(f"    JSON解析失败，原文前500字: {cleaned[:500]}")
     raise ValueError("无法解析JSON")
-
 
 # =============================================
 #       新闻抓取（多源 + RSS）
