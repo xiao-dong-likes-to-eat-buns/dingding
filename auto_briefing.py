@@ -39,12 +39,32 @@ def call_ai(system_prompt, user_prompt):
         "max_tokens": 4000,
         "stream": False
     }
-    resp = requests.post(
-        f"{SILICON_BASE_URL}/chat/completions",
-        headers=headers, json=payload, timeout=60
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+
+    # 最多重试 3 次
+    for attempt in range(3):
+        try:
+            print(f"    AI请求第{attempt+1}次...")
+            resp = requests.post(
+                f"{SILICON_BASE_URL}/chat/completions",
+                headers=headers, json=payload, timeout=120
+            )
+            print(f"    HTTP状态码: {resp.status_code}")
+            if resp.status_code != 200:
+                print(f"    响应内容: {resp.text[:500]}")
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except requests.exceptions.Timeout:
+            print(f"    第{attempt+1}次超时，等待5秒重试...")
+            time.sleep(5)
+        except requests.exceptions.ConnectionError as e:
+            print(f"    第{attempt+1}次连接失败: {e}")
+            time.sleep(5)
+        except Exception as e:
+            print(f"    第{attempt+1}次异常: {type(e).__name__}: {e}")
+            if attempt < 2:
+                time.sleep(5)
+
+    raise RuntimeError("AI调用3次全部失败")
 
 
 def parse_ai_json(raw_text):
