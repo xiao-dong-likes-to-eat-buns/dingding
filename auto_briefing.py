@@ -21,7 +21,7 @@ from config import *
 
 
 # =============================================
-#       AI 调用
+#       AI 调用（带重试）
 # =============================================
 
 def call_ai(system_prompt, user_prompt):
@@ -39,8 +39,6 @@ def call_ai(system_prompt, user_prompt):
         "max_tokens": 4000,
         "stream": False
     }
-
-    # 最多重试 3 次
     for attempt in range(3):
         try:
             print(f"    AI请求第{attempt+1}次...")
@@ -50,47 +48,112 @@ def call_ai(system_prompt, user_prompt):
             )
             print(f"    HTTP状态码: {resp.status_code}")
             if resp.status_code != 200:
-                print(f"    响应内容: {resp.text[:500]}")
+                print(f"    响应: {resp.text[:300]}")
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
-        except requests.exceptions.Timeout:
-            print(f"    第{attempt+1}次超时，等待5秒重试...")
-            time.sleep(5)
-        except requests.exceptions.ConnectionError as e:
-            print(f"    第{attempt+1}次连接失败: {e}")
-            time.sleep(5)
         except Exception as e:
-            print(f"    第{attempt+1}次异常: {type(e).__name__}: {e}")
+            print(f"    第{attempt+1}次失败: {type(e).__name__}: {e}")
             if attempt < 2:
                 time.sleep(5)
-
     raise RuntimeError("AI调用3次全部失败")
 
 
 def parse_ai_json(raw_text):
-    """从AI返回中提取JSON"""
+    """从AI返回中提取JSON（多策略）"""
     cleaned = raw_text.strip()
-    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```$', '', cleaned)
+
+    # 策略1: 去掉 markdown 代码块
+    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
     cleaned = cleaned.strip()
-    m = re.search(r'\{[\s\S]*\}', cleaned)
+
+    # 策略2: 找最外层 { ... }（非贪婪匹配第一个完整的JSON对象）
+    # 先找第一个 { 和最后一个 } 的位置
+    first_brace = cleaned.find('{')
+    last_brace = cleaned.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidate = cleaned[first_brace:last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # 策略3: 正则非贪婪匹配
+    m = re.search(r'\{[^{}]*"briefing"[^{}]*\}', cleaned, re.DOTALL)
     if m:
-        return json.loads(m.group())
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+
+    # 策略4: 暴力正则
+    m = re.search(r'\{[\s\S]*?\}(?=\s*$|\s*\n\n)', cleaned)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+
+    # 策略5: 整段尝试
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    print(f"    JSON解析失败，原文前500字: {cleaned[:500]}")
     raise ValueError("无法解析JSON")
 
 
 # =============================================
-#       新闻抓取（替换为稳定源）
+#       新闻抓取（多源 + RSS）
 # =============================================
 
+def fetch_rss_news(feed_url, source_name):
+    """通过 RSS 抓取新闻（最稳定）"""
+    news = []
+    try:
+        resp = requests.get(
+            feed_url, headers={"User-Agent": UA}, timeout=15
+        )
+        resp.encoding = "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = soup.find_all("item") or soup.find_all("entry")
+        for item in items[:6]:
+            title_tag = item.find("title")
+            if not title_tag:
+                continue
+            title = title_tag.get_text(strip=True)
+            if len(title) < 6:
+                continue
+            link_tag = item.find("link")
+            url = ""
+            if link_tag:
+                url = link_tag.get("href", "") or link_tag.get_text(strip=True)
+            desc_tag = item.find("description") or item.find("summary")
+            summary = ""
+            if desc_tag:
+                summary_text = desc_tag.get_text(strip=True)
+                summary = re.sub(r'<[^>]+>', '', summary_text)[:150]
+            news.append({
+                "title": title,
+                "summary": summary,
+                "source": source_name,
+                "url": url,
+                "content": ""
+            })
+    except Exception as e:
+        print(f"    RSS[{source_name}]失败: {e}")
+    return news
+
+
 def fetch_bing_news(keyword):
-    """从 Bing 资讯抓取（GitHub Actions 不会被拦截）"""
+    """从 Bing 资讯抓取"""
     news = []
     try:
         url = (
-            "https://cn.bing.com/news/search?"
+            "https://www.bing.com/news/search?"
             f"q={urllib.parse.quote(keyword)}"
-            "&qft=sortbydate%3d%221%22&form=YFNR"
+            "&FORM=HDRSC7"
         )
         resp = requests.get(
             url, headers={"User-Agent": UA}, timeout=15
@@ -98,42 +161,41 @@ def fetch_bing_news(keyword):
         resp.encoding = "utf-8"
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        cards = soup.find_all("div", class_=re.compile("news-card|newsitem"))
+        # 尝试多种选择器
+        cards = (
+            soup.find_all("div", class_=re.compile("news-card"))
+            or soup.find_all("div", class_=re.compile("newsitem"))
+            or soup.find_all("div", attrs={"data-t": True})
+        )
         if not cards:
-            # 备用选择器
-            cards = soup.find_all("a", class_=re.compile("title"))
+            # 最后尝试所有带标题链接的 div
+            cards = soup.find_all("div", class_=re.compile("t_s"))
 
         for card in cards[:8]:
-            a_tag = card.find("a", href=True) if card.name == "div" else card
+            a_tag = card.find("a", href=True)
             if not a_tag:
                 continue
             title = a_tag.get_text(strip=True)
             if len(title) < 8:
                 continue
 
-            # 提取摘要
             summary = ""
-            desc = card.find("div", class_=re.compile("snippet|des"))
-            if not desc:
-                desc = card.find("span", class_=re.compile("snippet"))
-            if desc:
-                summary = desc.get_text(strip=True)
+            for cls in ["snippet", "sk_body", "des"]:
+                s = card.find("div", class_=re.compile(cls))
+                if s:
+                    summary = s.get_text(strip=True)[:150]
+                    break
 
-            # 提取来源
             source = "Bing资讯"
-            src_tag = card.find(
-                "div", class_=re.compile("source|provider")
-            )
-            if not src_tag:
-                src_tag = card.find(
-                    "span", class_=re.compile("source|provider")
-                )
-            if src_tag:
-                source = src_tag.get_text(strip=True)[:20]
+            for cls in ["source", "provider", "src"]:
+                s = card.find("span", class_=re.compile(cls))
+                if s:
+                    source = s.get_text(strip=True)[:20]
+                    break
 
             href = a_tag.get("href", "")
-            if not href.startswith("http"):
-                href = "https://cn.bing.com" + href
+            if href and not href.startswith("http"):
+                href = "https://www.bing.com" + href
 
             news.append({
                 "title": title,
@@ -148,7 +210,7 @@ def fetch_bing_news(keyword):
 
 
 def fetch_sogou_news(keyword):
-    """从搜狗新闻抓取（备用源）"""
+    """从搜狗新闻抓取"""
     news = []
     try:
         url = (
@@ -170,8 +232,9 @@ def fetch_sogou_news(keyword):
             title = a_tag.get_text(strip=True)
             if len(title) < 8:
                 continue
+            # 注意：class_ 后面是单等号 =
             summary = ""
-            des = item.find("p", class_=="str_info")
+            des = item.find("p", class_="str_info")
             if des:
                 summary = des.get_text(strip=True)[:100]
             news.append({
@@ -187,7 +250,7 @@ def fetch_sogou_news(keyword):
 
 
 def fetch_thepaper_news():
-    """从澎湃新闻抓取保密相关新闻"""
+    """从澎湃新闻抓取"""
     news = []
     try:
         url = "https://www.thepaper.cn/searchResult?searchWord=%E4%BF%9D%E5%AF%86"
@@ -196,7 +259,6 @@ def fetch_thepaper_news():
         )
         resp.encoding = "utf-8"
         soup = BeautifulSoup(resp.text, "html.parser")
-
         items = soup.find_all("a", href=re.compile("newsDetail"))
         for item in items[:6]:
             title = item.get_text(strip=True)
@@ -255,27 +317,43 @@ def fetch_article_content(url, max_chars=500):
 def fetch_all_news():
     all_news = []
 
-    print("  [1/6] Bing资讯 - 保密案例通报...")
+    # RSS 源（最稳定，不被反爬）
+    print("  [1/8] RSS - 保密观...")
+    all_news += fetch_rss_news(
+        "https://rsshub.app/wechat/ershicimi/5b98640b1389e47232386d36",
+        "保密观"
+    )
+    time.sleep(1)
+
+    print("  [2/8] RSS - 澎湃法治...")
+    all_news += fetch_rss_news(
+        "https://rsshub.app/thepaper/channel/25572",
+        "澎湃新闻"
+    )
+    time.sleep(1)
+
+    # Bing 搜索
+    print("  [3/8] Bing - 保密案例通报...")
     all_news += fetch_bing_news("保密 案例 通报 违规 涉密")
     time.sleep(random.randint(2, 4))
 
-    print("  [2/6] Bing资讯 - 保密政策法规...")
+    print("  [4/8] Bing - 保密政策法规...")
     all_news += fetch_bing_news("国家保密局 最新 规定 通知")
     time.sleep(random.randint(2, 4))
 
-    print("  [3/6] Bing资讯 - 涉密人员管理...")
+    print("  [5/8] Bing - 涉密人员管理...")
     all_news += fetch_bing_news("涉密人员 保密管理 培训")
     time.sleep(random.randint(2, 4))
 
-    print("  [4/6] Bing资讯 - 保密技术防范...")
+    print("  [6/8] Bing - 保密技术防范...")
     all_news += fetch_bing_news("保密技术 网络安全 信息安全")
     time.sleep(random.randint(2, 4))
 
-    print("  [5/6] 搜狗新闻 - 保密...")
+    print("  [7/8] 搜狗 - 保密...")
     all_news += fetch_sogou_news("保密 泄密 涉密 处分")
     time.sleep(random.randint(2, 4))
 
-    print("  [6/6] 澎湃新闻 - 保密...")
+    print("  [8/8] 澎湃 - 保密...")
     all_news += fetch_thepaper_news()
 
     # 去重
@@ -289,7 +367,7 @@ def fetch_all_news():
 
     print(f"  去重后共 {len(unique)} 条")
 
-    # 抓取正文（至少凑够 5 篇）
+    # 抓取正文
     count = 0
     for item in unique:
         if count >= 5:
@@ -324,12 +402,14 @@ def generate_briefing_and_quiz(news_list):
             news_text += f"正文：{item['content'][:500]}\n"
 
     if not news_text.strip():
-        news_text = "（暂未抓到新闻，请根据近期保密行业热点生成）"
+        news_text = "（暂未抓到新闻，请根据近期保密行业热点自拟内容）"
 
     system_prompt = (
         "你是资深保密行业培训专家，专注于为涉密人员提供"
         "实用的保密知识和技能培训内容。"
-        "只返回合法JSON，不要代码块。"
+        "\n\n【重要】你必须且只能返回合法的JSON字符串，"
+        "不要返回任何其他文字、解释、markdown标记或代码块标记。"
+        "直接以 { 开头，以 } 结尾。"
     )
 
     user_prompt = f"""今天是{today.strftime('%Y年%m月%d日')} {weekday}。
@@ -339,7 +419,7 @@ def generate_briefing_and_quiz(news_list):
 
 === 筛选要求 ===
 
-你必须严格筛选，只保留以下类型的内容（适合涉密人员学习）：
+只保留适合涉密人员学习的内容：
 ✅ 保密违规案例及处分通报
 ✅ 保密法律法规的最新解读和要求
 ✅ 涉密人员管理的政策和实务
@@ -348,20 +428,21 @@ def generate_briefing_and_quiz(news_list):
 ✅ 保密检查和审查相关要求
 ✅ 保密培训和教育相关内容
 
-必须排除以下内容：
-❌ 领导人外事活动、政务新闻（即使来自保密局网站）
+排除以下内容：
+❌ 领导人外事活动、政务新闻
 ❌ 与保密工作无直接关系的政策
 ❌ 纯粹的宣传口号或表态性内容
 ❌ 过于久远的旧闻
 
-如果筛选后没有合适的内容，请根据近期保密热点自拟一条实用知识。
+如果筛选后没有合适内容，请根据近期保密热点自拟。
 
-=== 输出格式 ===
+=== 严格输出格式 ===
 
-严格按此JSON格式返回：
-{{"briefing": "早报markdown", "links": [{{"index": 1, "url": "链接", "source": "来源"}}], "questions": [{{"question": "题目？", "options": ["A. xx", "B. xx", "C. xx", "D. xx"], "answer": "A", "explanation": "解析"}}]}}
+只返回下面这个JSON，不要任何其他文字：
 
-=== 早报格式 ===
+{{"briefing":"早报markdown内容","links":[{{"index":1,"url":"链接","source":"来源"}}],"questions":[{{"question":"题目？","options":["A. xx","B. xx","C. xx","D. xx"],"answer":"A","explanation":"解析"}}]}}
+
+早报markdown格式如下：
 
 🔐 **保密知识早报** | {today.strftime('%m月%d日')} {weekday}
 
@@ -369,26 +450,33 @@ def generate_briefing_and_quiz(news_list):
 
 **1. 标题**
 [来源]
-3-5句话详细介绍，让涉密人员了解核心要点、具体要求和实务建议。
+3-5句话详细介绍，核心要点和实务建议。
 
 **2. 标题**
 [来源]
 3-5句话详细介绍。
 
 💡 **保密提醒**
-结合今日内容，给涉密人员1条实用的工作建议。
+结合今日内容，给涉密人员1条实用工作建议。
 
 🔑 **关键词**：词1 | 词2 | 词3
 
-=== 选择题要求 ===
-生成5-8道单选题，每题4选项，1个正确答案。
-至少一半题目来自今日新闻，其余考察涉密人员必备知识。
-每题附简短解析。"""
+生成5-8道单选题，每题4选项，1个正确答案。至少一半来自今日新闻，其余考察涉密人员必备知识。每题附简短解析。"""
 
     try:
         raw = call_ai(system_prompt, user_prompt)
         print(f"  AI返回 {len(raw)} 字")
+
+        # 保存原始返回用于调试
+        print(f"  AI原文前200字: {raw[:200]}")
+
         result = parse_ai_json(raw)
+
+        # 校验必需字段
+        if "briefing" not in result:
+            raise ValueError("JSON缺少briefing字段")
+        if "questions" not in result:
+            result["questions"] = []
 
         # 拼接链接区
         briefing = result.get("briefing", "")
@@ -420,7 +508,7 @@ def generate_briefing_and_quiz(news_list):
         return result
 
     except Exception as e:
-        print(f"  AI失败: {e}")
+        print(f"  AI失败: {type(e).__name__}: {e}")
         return {
             "briefing": (
                 f"🔐 **保密知识早报** | "
