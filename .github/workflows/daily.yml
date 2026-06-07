@@ -1,13 +1,12 @@
-name: 每日保密早报推送
+name: 保密知识每日推送
 
 on:
   schedule:
-    # UTC 01:30 = 北京时间 09:30
-    - cron: '30 1 * * *'
+    - cron: '30 1 * * *'     # 北京时间 09:30
   workflow_dispatch:
 
 jobs:
-  push-briefing:
+  auto-briefing:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,9 +20,9 @@ jobs:
           pip install requests
           pip install beautifulsoup4
 
-      - name: 推送早报
+      - name: 自动推送保密知识
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET:  ${{ secrets.DINGTALK_SECRET }}
           SILICON_API_KEY:  ${{ secrets.SILICON_API_KEY }}
-        run: python daily_briefing.py
+        run: python auto_briefing.py
