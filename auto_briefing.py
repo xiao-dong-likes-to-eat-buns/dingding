@@ -455,68 +455,40 @@ def generate_briefing_and_quiz(news_list):
         if "questions" not in result:
             result["questions"] = []
 
-            # 把链接嵌入标题 + 底部参考链接也带链接
+    
+python
+        # 直接在参考链接的每行 • 后面插入URL
         briefing = result.get("briefing", "")
 
-        # 构建 index -> url 映射
         url_map = {}
-        ai_links = result.get("links", [])
-        for lk in ai_links:
-            idx = lk.get("index")
-            url = lk.get("url", "")
-            if idx and url and url.startswith("http"):
-                url_map[idx] = url
         for i, item in enumerate(news_list[:12], 1):
-            if i not in url_map and item.get("url") and item["url"].startswith("http"):
+            if item.get("url") and item["url"].startswith("http"):
                 url_map[i] = item["url"]
 
-        # 匹配 **N. 标题** 格式
-        title_pattern = re.findall(r'\*\*(\d+)\.\s*(.+?)\*\*', briefing)
+        # 从AI返回中提取它生成的链接条目标题
+        link_items = re.findall(r'•\s*(.+)', briefing)
 
-        if title_pattern and url_map:
-            # 底部参考链接：替换为可点击的
-            old_links_block = ""
-            lines = briefing.split("\n")
-            in_links = False
-            link_lines = []
-            rest_lines = []
-            for line in lines:
-                if "参考链接" in line:
-                    in_links = True
-                    rest_lines.append(line)
-                    continue
-                if in_links and line.strip().startswith("•"):
-                    link_lines.append(line)
-                elif in_links and link_lines:
-                    # 参考链接区块结束，重建它
-                    new_block = []
-                    for idx_str, title in title_pattern:
-                        idx = int(idx_str)
-                        url = url_map.get(idx, "")
-                        clean_t = title.strip()[:30]
-                        if url:
-                            new_block.append(f"• [{clean_t}]({url})")
-                        else:
-                            new_block.append(f"• {clean_t}")
-                    rest_lines.extend(new_block)
-                    rest_lines.append(line)
-                    in_links = False
-                    link_lines = []
-                else:
-                    rest_lines.append(line)
-
-            # 如果文件末尾就是参考链接
-            if in_links and link_lines:
-                for idx_str, title in title_pattern:
-                    idx = int(idx_str)
-                    url = url_map.get(idx, "")
-                    clean_t = title.strip()[:30]
-                    if url:
-                        rest_lines.append(f"• [{clean_t}]({url})")
+        if link_items and url_map:
+            new_briefing_lines = []
+            for line in briefing.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("• ") and not stripped.startswith("• ["):
+                    link_text = stripped[2:].strip()
+                    # 用前几个字匹配 news_list 里的原始标题
+                    found_url = ""
+                    for i, item in enumerate(news_list[:12], 1):
+                        orig_title = item.get("title", "")
+                        # 双向匹配：AI标题包含原标题前8字，或原标题包含AI标题前8字
+                        if (link_text[:8] in orig_title) or (orig_title[:8] in link_text):
+                            found_url = item.get("url", "")
+                            break
+                    if found_url:
+                        new_briefing_lines.append(f"• [{link_text}]({found_url})")
                     else:
-                        rest_lines.append(f"• {clean_t}")
-
-            briefing = "\n".join(rest_lines)
+                        new_briefing_lines.append(line)
+                else:
+                    new_briefing_lines.append(line)
+            briefing = "\n".join(new_briefing_lines)
 
         result["briefing"] = briefing
         return result
