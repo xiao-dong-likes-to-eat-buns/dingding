@@ -456,19 +456,13 @@ def generate_briefing_and_quiz(news_list):
             result["questions"] = []
 
     
-        # ========== 程序自动追加可点击的参考链接 ==========
+               # ========== 程序自动追加可点击的参考链接 ==========
         briefing = result.get("briefing", "")
 
-        # 1. 构建 index -> url 映射
-        url_map = {}
-        for i, item in enumerate(news_list[:12], 1):
-            if item.get("url") and item["url"].startswith("http"):
-                url_map[i] = item["url"]
-
-        # 2. 从 briefing 中提取 **N. 标题**
+        # 1. 从 briefing 中提取 **N. 标题**
         title_pattern = re.findall(r'\*\*(\d+)\.\s*(.+?)\*\*', briefing)
 
-        # 3. 删除 AI 可能生成的旧参考链接区块
+        # 2. 删除 AI 生成的旧参考链接区块
         lines = briefing.split("\n")
         clean_lines = []
         skip = False
@@ -476,10 +470,7 @@ def generate_briefing_and_quiz(news_list):
             if "参考链接" in line:
                 skip = True
                 continue
-            if skip and line.strip().startswith("•"):
-                continue
-            if skip and line.strip() == "---":
-                skip = False
+            if skip and (line.strip().startswith("•") or line.strip() == "" or line.strip() == "---"):
                 continue
             if skip and line.strip() != "":
                 skip = False
@@ -487,19 +478,31 @@ def generate_briefing_and_quiz(news_list):
                 clean_lines.append(line)
         briefing = "\n".join(clean_lines).rstrip()
 
-        # 4. 只要有标题匹配到 URL，就追加参考链接
-        if title_pattern and url_map:
+        # 3. 用标题文字相似度匹配原始新闻URL（不用编号）
+        if title_pattern:
             link_section = "\n\n---\n\n🔗 **参考链接**\n\n"
             has_link = False
             for idx_str, ai_title in title_pattern:
-                idx = int(idx_str)
-                url = url_map.get(idx, "")
-                clean_title = ai_title.strip()[:30]
-                if url:
-                    link_section += f"• [{clean_title}]({url})\n"
+                ai_t = ai_title.strip()
+                best_url = ""
+                best_score = 0
+                for item in news_list[:12]:
+                    orig = item.get("title", "")
+                    url = item.get("url", "")
+                    if not orig or not url.startswith("http"):
+                        continue
+                    # 从长到短尝试匹配前N个字
+                    for n in [20, 15, 10, 8, 6, 4]:
+                        if ai_t[:n] in orig or orig[:n] in ai_t:
+                            if n > best_score:
+                                best_score = n
+                                best_url = url
+                            break
+                if best_url:
+                    link_section += f"• [{ai_t}]({best_url})\n"
                     has_link = True
                 else:
-                    link_section += f"• {clean_title}\n"
+                    link_section += f"• {ai_t}\n"
             link_section += "\n---\n"
 
             if has_link:
@@ -507,6 +510,7 @@ def generate_briefing_and_quiz(news_list):
 
         result["briefing"] = briefing
         return result
+
 
 
     except Exception as e:
