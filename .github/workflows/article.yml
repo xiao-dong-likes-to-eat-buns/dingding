@@ -1,0 +1,40 @@
+name: 文章入库知识库
+
+on:
+  workflow_dispatch:
+    inputs:
+      article_url:
+        description: '文章URL（必填）'
+        required: true
+        type: string
+      article_title:
+        description: '文章标题（选填，留空则自动提取）'
+        required: false
+        type: string
+
+jobs:
+  article-to-kb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install requests
+          pip install beautifulsoup4
+
+      - name: 文章入库
+        env:
+          DINGTALK_WEBHOOK:    ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET:     ${{ secrets.DINGTALK_SECRET }}
+          SILICON_API_KEY:     ${{ secrets.SILICON_API_KEY }}
+          DINGTALK_APP_KEY:    ${{ secrets.DINGTALK_APP_KEY }}
+          DINGTALK_APP_SECRET: ${{ secrets.DINGTALK_APP_SECRET }}
+          DINGTALK_SPACE_ID:   ${{ secrets.DINGTALK_SPACE_ID }}
+          ARTICLE_URL:         ${{ github.event.inputs.article_url }}
+          ARTICLE_TITLE:       ${{ github.event.inputs.article_title }}
+        run: python article_to_kb.py
