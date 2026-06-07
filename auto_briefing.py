@@ -455,23 +455,68 @@ def generate_briefing_and_quiz(news_list):
         if "questions" not in result:
             result["questions"] = []
 
-        # 拼接链接
+            # 把链接嵌入标题 + 底部参考链接也带链接
         briefing = result.get("briefing", "")
+
+        # 构建 index -> url 映射
         url_map = {}
+        ai_links = result.get("links", [])
+        for lk in ai_links:
+            idx = lk.get("index")
+            url = lk.get("url", "")
+            if idx and url and url.startswith("http"):
+                url_map[idx] = url
         for i, item in enumerate(news_list[:12], 1):
-            if item.get("url"):
+            if i not in url_map and item.get("url") and item["url"].startswith("http"):
                 url_map[i] = item["url"]
 
+        # 匹配 **N. 标题** 格式
         title_pattern = re.findall(r'\*\*(\d+)\.\s*(.+?)\*\*', briefing)
-        if title_pattern:
-            briefing += "\n\n---\n\n🔗 **参考链接**\n\n"
-            for idx_str, title in title_pattern:
-                idx = int(idx_str)
-                url = url_map.get(idx, "")
-                if url:
+
+        if title_pattern and url_map:
+            # 底部参考链接：替换为可点击的
+            old_links_block = ""
+            lines = briefing.split("\n")
+            in_links = False
+            link_lines = []
+            rest_lines = []
+            for line in lines:
+                if "参考链接" in line:
+                    in_links = True
+                    rest_lines.append(line)
+                    continue
+                if in_links and line.strip().startswith("•"):
+                    link_lines.append(line)
+                elif in_links and link_lines:
+                    # 参考链接区块结束，重建它
+                    new_block = []
+                    for idx_str, title in title_pattern:
+                        idx = int(idx_str)
+                        url = url_map.get(idx, "")
+                        clean_t = title.strip()[:30]
+                        if url:
+                            new_block.append(f"• [{clean_t}]({url})")
+                        else:
+                            new_block.append(f"• {clean_t}")
+                    rest_lines.extend(new_block)
+                    rest_lines.append(line)
+                    in_links = False
+                    link_lines = []
+                else:
+                    rest_lines.append(line)
+
+            # 如果文件末尾就是参考链接
+            if in_links and link_lines:
+                for idx_str, title in title_pattern:
+                    idx = int(idx_str)
+                    url = url_map.get(idx, "")
                     clean_t = title.strip()[:30]
-                    briefing += f"• [{clean_t}]({url})\n"
-            briefing += "\n---\n"
+                    if url:
+                        rest_lines.append(f"• [{clean_t}]({url})")
+                    else:
+                        rest_lines.append(f"• {clean_t}")
+
+            briefing = "\n".join(rest_lines)
 
         result["briefing"] = briefing
         return result
