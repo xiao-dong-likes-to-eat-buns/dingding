@@ -456,7 +456,6 @@ def generate_briefing_and_quiz(news_list):
             result["questions"] = []
 
     
-python
         # 直接在参考链接的每行 • 后面插入URL
         briefing = result.get("briefing", "")
 
