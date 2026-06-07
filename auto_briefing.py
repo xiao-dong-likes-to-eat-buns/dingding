@@ -26,7 +26,7 @@ from config import *
 
 def call_ai(system_prompt, user_prompt):
     headers = {
-        "Authorization": f"Bearer {sk-hnhvcflnqfxtltspkvewybaqmooionihahrenoetzuwnynrm}",
+        "Authorization": f"Bearer {AI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
