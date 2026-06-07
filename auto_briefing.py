@@ -26,7 +26,7 @@ from config import *
 
 def call_ai(system_prompt, user_prompt):
     headers = {
-        "Authorization": f"Bearer {SILICON_API_KEY}",
+        "Authorization": f"Bearer {sk-hnhvcflnqfxtltspkvewybaqmooionihahrenoetzuwnynrm}",
         "Content-Type": "application/json"
     }
     payload = {
