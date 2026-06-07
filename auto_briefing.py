@@ -60,91 +60,140 @@ def parse_ai_json(raw_text):
 
 
 # =============================================
-#       新闻抓取
+#       新闻抓取（替换为稳定源）
 # =============================================
 
-def fetch_baidu_news(keyword):
+def fetch_bing_news(keyword):
+    """从 Bing 资讯抓取（GitHub Actions 不会被拦截）"""
     news = []
     try:
         url = (
-            "https://www.baidu.com/s?"
-            "rtt=1&bsst=1&cl=2&tn=news&ie=utf-8"
-            f"&word={urllib.parse.quote(keyword)}"
+            "https://cn.bing.com/news/search?"
+            f"q={urllib.parse.quote(keyword)}"
+            "&qft=sortbydate%3d%221%22&form=YFNR"
         )
         resp = requests.get(
             url, headers={"User-Agent": UA}, timeout=15
         )
         resp.encoding = "utf-8"
         soup = BeautifulSoup(resp.text, "html.parser")
-        containers = soup.find_all(
-            "div",
-            class_=re.compile(
-                r"result-op c-container|c-container"
-            )
-        )
-        for item in containers[:8]:
-            a_tag = item.find("a", href=True)
+
+        cards = soup.find_all("div", class_=re.compile("news-card|newsitem"))
+        if not cards:
+            # 备用选择器
+            cards = soup.find_all("a", class_=re.compile("title"))
+
+        for card in cards[:8]:
+            a_tag = card.find("a", href=True) if card.name == "div" else card
             if not a_tag:
                 continue
             title = a_tag.get_text(strip=True)
-            if len(title) < 6:
+            if len(title) < 8:
                 continue
+
+            # 提取摘要
             summary = ""
-            for cls in [
-                "c-font-normal", "content-right", "c-abstract"
-            ]:
-                s = item.find("span", class_=re.compile(cls))
-                if s:
-                    summary = s.get_text(strip=True)
-                    break
-            source = "百度资讯"
-            for cls in ["c-color-gray"]:
-                s = item.find("span", class_=re.compile(cls))
-                if s:
-                    txt = s.get_text(strip=True)
-                    if txt and 2 < len(txt) < 30:
-                        source = txt
-                        break
+            desc = card.find("div", class_=re.compile("snippet|des"))
+            if not desc:
+                desc = card.find("span", class_=re.compile("snippet"))
+            if desc:
+                summary = desc.get_text(strip=True)
+
+            # 提取来源
+            source = "Bing资讯"
+            src_tag = card.find(
+                "div", class_=re.compile("source|provider")
+            )
+            if not src_tag:
+                src_tag = card.find(
+                    "span", class_=re.compile("source|provider")
+                )
+            if src_tag:
+                source = src_tag.get_text(strip=True)[:20]
+
+            href = a_tag.get("href", "")
+            if not href.startswith("http"):
+                href = "https://cn.bing.com" + href
+
             news.append({
                 "title": title,
                 "summary": summary,
                 "source": source,
-                "url": a_tag.get("href", ""),
+                "url": href,
                 "content": ""
             })
     except Exception as e:
-        print(f"    百度[{keyword}]失败: {e}")
+        print(f"    Bing[{keyword}]失败: {e}")
     return news
 
 
-def fetch_gjbmj_filtered():
+def fetch_sogou_news(keyword):
+    """从搜狗新闻抓取（备用源）"""
     news = []
     try:
+        url = (
+            "https://news.sogou.com/news?"
+            f"query={urllib.parse.quote(keyword)}"
+            "&sort=1"
+        )
         resp = requests.get(
-            "http://www.gjbmj.gov.cn/",
-            headers={"User-Agent": UA}, timeout=15
+            url, headers={"User-Agent": UA}, timeout=15
         )
         resp.encoding = "utf-8"
         soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            title = a.get_text(strip=True)
-            if len(title) > 8:
-                has_bm = any(kw in title for kw in BM_KEYWORDS)
-                has_ex = any(kw in title for kw in EXCLUDE_KEYWORDS)
-                if has_bm and not has_ex:
-                    href = a["href"]
-                    if not href.startswith("http"):
-                        href = "http://www.gjbmj.gov.cn" + href
-                    news.append({
-                        "title": title,
-                        "summary": "",
-                        "source": "国家保密局",
-                        "url": href,
-                        "content": ""
-                    })
+
+        items = soup.find_all("div", class_=re.compile("vrwrap|rb"))
+        for item in items[:8]:
+            a_tag = item.find("a", href=True)
+            if not a_tag:
+                continue
+            title = a_tag.get_text(strip=True)
+            if len(title) < 8:
+                continue
+            summary = ""
+            des = item.find("p", class_=="str_info")
+            if des:
+                summary = des.get_text(strip=True)[:100]
+            news.append({
+                "title": title,
+                "summary": summary,
+                "source": "搜狗新闻",
+                "url": a_tag["href"],
+                "content": ""
+            })
     except Exception as e:
-        print(f"    国保局失败: {e}")
-    return news[:6]
+        print(f"    搜狗[{keyword}]失败: {e}")
+    return news
+
+
+def fetch_thepaper_news():
+    """从澎湃新闻抓取保密相关新闻"""
+    news = []
+    try:
+        url = "https://www.thepaper.cn/searchResult?searchWord=%E4%BF%9D%E5%AF%86"
+        resp = requests.get(
+            url, headers={"User-Agent": UA}, timeout=15
+        )
+        resp.encoding = "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        items = soup.find_all("a", href=re.compile("newsDetail"))
+        for item in items[:6]:
+            title = item.get_text(strip=True)
+            if len(title) > 8:
+                href = item["href"]
+                if not href.startswith("http"):
+                    href = "https://www.thepaper.cn" + href
+                news.append({
+                    "title": title,
+                    "summary": "",
+                    "source": "澎湃新闻",
+                    "url": href,
+                    "content": ""
+                })
+    except Exception as e:
+        print(f"    澎湃搜索失败: {e}")
+    return news
 
 
 def fetch_article_content(url, max_chars=500):
@@ -186,37 +235,41 @@ def fetch_article_content(url, max_chars=500):
 def fetch_all_news():
     all_news = []
 
-    print("  [1/5] 百度资讯 - 保密案例通报...")
-    all_news += fetch_baidu_news("保密 案例 通报 违规 涉密")
+    print("  [1/6] Bing资讯 - 保密案例通报...")
+    all_news += fetch_bing_news("保密 案例 通报 违规 涉密")
     time.sleep(random.randint(2, 4))
 
-    print("  [2/5] 百度资讯 - 保密政策法规...")
-    all_news += fetch_baidu_news("国家保密局 最新 规定 通知")
+    print("  [2/6] Bing资讯 - 保密政策法规...")
+    all_news += fetch_bing_news("国家保密局 最新 规定 通知")
     time.sleep(random.randint(2, 4))
 
-    print("  [3/5] 百度资讯 - 涉密人员管理...")
-    all_news += fetch_baidu_news("涉密人员 保密管理 培训")
+    print("  [3/6] Bing资讯 - 涉密人员管理...")
+    all_news += fetch_bing_news("涉密人员 保密管理 培训")
     time.sleep(random.randint(2, 4))
 
-    print("  [4/5] 百度资讯 - 保密技术防范...")
-    all_news += fetch_baidu_news("保密技术 网络安全 信息安全")
+    print("  [4/6] Bing资讯 - 保密技术防范...")
+    all_news += fetch_bing_news("保密技术 网络安全 信息安全")
     time.sleep(random.randint(2, 4))
 
-    print("  [5/5] 国家保密局官网...")
-    all_news += fetch_gjbmj_filtered()
+    print("  [5/6] 搜狗新闻 - 保密...")
+    all_news += fetch_sogou_news("保密 泄密 涉密 处分")
+    time.sleep(random.randint(2, 4))
+
+    print("  [6/6] 澎湃新闻 - 保密...")
+    all_news += fetch_thepaper_news()
 
     # 去重
     seen = set()
     unique = []
     for item in all_news:
-        key = item["title"][:20]
+        key = item["title"][:15]
         if key not in seen:
             seen.add(key)
             unique.append(item)
 
     print(f"  去重后共 {len(unique)} 条")
 
-    # 抓取正文
+    # 抓取正文（至少凑够 5 篇）
     count = 0
     for item in unique:
         if count >= 5:
