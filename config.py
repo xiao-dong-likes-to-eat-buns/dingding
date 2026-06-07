@@ -15,7 +15,7 @@ DINGTALK_SPACE_ID   = os.environ.get("DINGTALK_SPACE_ID", "b6Vz6LODZkn7VmZ9")
 # ============ 硅基流动 AI ============
 SILICON_API_KEY  = os.environ.get("SILICON_API_KEY", "sk-hnhvcflnqfxtltspkvewybaqmooionihahrenoetzuwnynrm")
 SILICON_BASE_URL = "https://api.siliconflow.cn/v1"
-SILICON_MODEL    = "Qwen/Qwen2.5-7B-Instruct"
+SILICON_MODEL    = "Qwen/Qwen2.5-72B-Instruct"
 
 # ============ 保密关键词（用于过滤非相关内容） ============
 BM_KEYWORDS = [
