@@ -393,107 +393,76 @@ def generate_briefing_and_quiz(news_list):
 
     news_text = ""
     for i, item in enumerate(news_list[:12], 1):
-        news_text += f"\n--- 第{i}条 ---\n"
-        news_text += f"标题：{item['title']}\n"
-        news_text += f"来源：{item['source']}\n"
+        news_text += f"\n第{i}条：{item['title']}"
+        if item.get("source"):
+            news_text += f"（{item['source']}）"
         if item.get("summary"):
-            news_text += f"摘要：{item['summary']}\n"
+            news_text += f"\n摘要：{item['summary'][:200]}"
         if item.get("content"):
-            news_text += f"正文：{item['content'][:500]}\n"
+            news_text += f"\n正文：{item['content'][:300]}"
+        news_text += "\n"
 
     if not news_text.strip():
-        news_text = "（暂未抓到新闻，请根据近期保密行业热点自拟内容）"
+        news_text = "暂未抓到新闻，请根据近期保密行业热点自拟内容。"
 
-    system_prompt = (
-        "你是资深保密行业培训专家，专注于为涉密人员提供"
-        "实用的保密知识和技能培训内容。"
-        "\n\n【重要】你必须且只能返回合法的JSON字符串，"
-        "不要返回任何其他文字、解释、markdown标记或代码块标记。"
-        "直接以 { 开头，以 } 结尾。"
-    )
+    system_prompt = "你是保密行业培训专家。只返回纯JSON，不要markdown代码块，不要任何多余文字。"
 
     user_prompt = f"""今天是{today.strftime('%Y年%m月%d日')} {weekday}。
 
-以下是从权威媒体抓取的保密相关新闻素材：
+新闻素材：
 {news_text}
 
-=== 筛选要求 ===
+请基于以上素材生成保密知识早报和选择题。只保留与保密工作直接相关的新闻，排除政务新闻和无关内容。如果没有相关新闻就自拟。
 
-只保留适合涉密人员学习的内容：
-✅ 保密违规案例及处分通报
-✅ 保密法律法规的最新解读和要求
-✅ 涉密人员管理的政策和实务
-✅ 涉密载体、涉密信息系统管理规定
-✅ 保密技术防范知识和技能
-✅ 保密检查和审查相关要求
-✅ 保密培训和教育相关内容
+只返回这个JSON格式，以{{开头，以}}结尾，不要任何其他文字：
 
-排除以下内容：
-❌ 领导人外事活动、政务新闻
-❌ 与保密工作无直接关系的政策
-❌ 纯粹的宣传口号或表态性内容
-❌ 过于久远的旧闻
+{{
+  "briefing": "用markdown格式写的早报，包含标题、今日精选2-3条新闻介绍、保密提醒、关键词",
+  "questions": [
+    {{"question": "题目", "options": ["A. 选项1", "B. 选项2", "C. 选项3", "D. 选项4"], "answer": "A", "explanation": "解析"}}
+  ]
+}}
 
-如果筛选后没有合适内容，请根据近期保密热点自拟。
-
-=== 严格输出格式 ===
-
-只返回下面这个JSON，不要任何其他文字：
-
-{{"briefing":"早报markdown内容","links":[{{"index":1,"url":"链接","source":"来源"}}],"questions":[{{"question":"题目？","options":["A. xx","B. xx","C. xx","D. xx"],"answer":"A","explanation":"解析"}}]}}
-
-早报markdown格式如下：
-
+早报格式要求：
 🔐 **保密知识早报** | {today.strftime('%m月%d日')} {weekday}
 
 📌 **今日精选**
 
-**1. 标题**
+**1. 新闻标题**
 [来源]
-3-5句话详细介绍，核心要点和实务建议。
+介绍内容3-5句话。
 
-**2. 标题**
+**2. 新闻标题**
 [来源]
-3-5句话详细介绍。
+介绍内容3-5句话。
 
 💡 **保密提醒**
-结合今日内容，给涉密人员1条实用工作建议。
+给涉密人员1条实用工作建议。
 
 🔑 **关键词**：词1 | 词2 | 词3
 
-生成5-8道单选题，每题4选项，1个正确答案。至少一半来自今日新闻，其余考察涉密人员必备知识。每题附简短解析。"""
+选择题：生成5-8道单选题，每题4选项，至少一半来自今日新闻，每题附解析。"""
 
     try:
         raw = call_ai(system_prompt, user_prompt)
         print(f"  AI返回 {len(raw)} 字")
-
-        # 保存原始返回用于调试
-        print(f"  AI原文前200字: {raw[:200]}")
+        print(f"  AI原文前300字: {raw[:300]}")
 
         result = parse_ai_json(raw)
 
-        # 校验必需字段
         if "briefing" not in result:
             raise ValueError("JSON缺少briefing字段")
         if "questions" not in result:
             result["questions"] = []
 
-        # 拼接链接区
+        # 拼接链接
         briefing = result.get("briefing", "")
-        ai_links = result.get("links", [])
         url_map = {}
-        for lk in ai_links:
-            idx = lk.get("index")
-            url = lk.get("url", "")
-            if idx and url and url.startswith("http"):
-                url_map[idx] = url
         for i, item in enumerate(news_list[:12], 1):
-            if i not in url_map and item.get("url"):
+            if item.get("url"):
                 url_map[i] = item["url"]
 
-        title_pattern = re.findall(
-            r'\*\*(\d+)\.\s*(.+?)\*\*', briefing
-        )
+        title_pattern = re.findall(r'\*\*(\d+)\.\s*(.+?)\*\*', briefing)
         if title_pattern:
             briefing += "\n\n---\n\n🔗 **参考链接**\n\n"
             for idx_str, title in title_pattern:
@@ -526,10 +495,7 @@ def generate_briefing_and_quiz(news_list):
                         "D. 只会断网"
                     ],
                     "answer": "B",
-                    "explanation": (
-                        "涉密计算机连接互联网可能被植入木马，"
-                        "导致涉密信息泄露。"
-                    )
+                    "explanation": "涉密计算机连接互联网可能被植入木马，导致涉密信息泄露。"
                 }
             ]
         }
