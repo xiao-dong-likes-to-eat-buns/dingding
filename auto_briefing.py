@@ -456,41 +456,58 @@ def generate_briefing_and_quiz(news_list):
             result["questions"] = []
 
     
-        # 直接在参考链接的每行 • 后面插入URL
+        # ========== 程序自动追加可点击的参考链接 ==========
         briefing = result.get("briefing", "")
 
+        # 1. 构建 index -> url 映射
         url_map = {}
         for i, item in enumerate(news_list[:12], 1):
             if item.get("url") and item["url"].startswith("http"):
                 url_map[i] = item["url"]
 
-        # 从AI返回中提取它生成的链接条目标题
-        link_items = re.findall(r'•\s*(.+)', briefing)
+        # 2. 从 briefing 中提取 **N. 标题**
+        title_pattern = re.findall(r'\*\*(\d+)\.\s*(.+?)\*\*', briefing)
 
-        if link_items and url_map:
-            new_briefing_lines = []
-            for line in briefing.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("• ") and not stripped.startswith("• ["):
-                    link_text = stripped[2:].strip()
-                    # 用前几个字匹配 news_list 里的原始标题
-                    found_url = ""
-                    for i, item in enumerate(news_list[:12], 1):
-                        orig_title = item.get("title", "")
-                        # 双向匹配：AI标题包含原标题前8字，或原标题包含AI标题前8字
-                        if (link_text[:8] in orig_title) or (orig_title[:8] in link_text):
-                            found_url = item.get("url", "")
-                            break
-                    if found_url:
-                        new_briefing_lines.append(f"• [{link_text}]({found_url})")
-                    else:
-                        new_briefing_lines.append(line)
+        # 3. 删除 AI 可能生成的旧参考链接区块
+        lines = briefing.split("\n")
+        clean_lines = []
+        skip = False
+        for line in lines:
+            if "参考链接" in line:
+                skip = True
+                continue
+            if skip and line.strip().startswith("•"):
+                continue
+            if skip and line.strip() == "---":
+                skip = False
+                continue
+            if skip and line.strip() != "":
+                skip = False
+            if not skip:
+                clean_lines.append(line)
+        briefing = "\n".join(clean_lines).rstrip()
+
+        # 4. 只要有标题匹配到 URL，就追加参考链接
+        if title_pattern and url_map:
+            link_section = "\n\n---\n\n🔗 **参考链接**\n\n"
+            has_link = False
+            for idx_str, ai_title in title_pattern:
+                idx = int(idx_str)
+                url = url_map.get(idx, "")
+                clean_title = ai_title.strip()[:30]
+                if url:
+                    link_section += f"• [{clean_title}]({url})\n"
+                    has_link = True
                 else:
-                    new_briefing_lines.append(line)
-            briefing = "\n".join(new_briefing_lines)
+                    link_section += f"• {clean_title}\n"
+            link_section += "\n---\n"
+
+            if has_link:
+                briefing += link_section
 
         result["briefing"] = briefing
         return result
+
 
     except Exception as e:
         print(f"  AI失败: {type(e).__name__}: {e}")
